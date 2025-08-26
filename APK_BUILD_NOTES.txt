@@ -1,0 +1,21 @@
+# Private APK build with GitHub Actions
+
+## Keystore (local, quick)
+1) Generate a keystore (Android Studio or keytool):
+   keytool -genkeypair -v -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000
+2) Base64-encode it:
+   base64 upload.keystore > upload.keystore.b64
+3) Save to repo secrets (GitHub → Settings → Secrets and variables → Actions):
+   - KEYSTORE = contents of upload.keystore.b64
+   - KEYSTORE_PASSWORD = your keystore password
+   - KEY_ALIAS = upload
+   - KEY_ALIAS_PASSWORD = your key alias password
+
+## Build trigger
+- Push to `release/*` or create a tag `v*`.
+- The workflow builds the APK and uploads it as a Release asset (if tagged) or a build artifact (if branch).
+
+## Repo structure expected
+- Android wrapper project at `android/` (WebView/TWA) with Gradle signing using variables:
+  - MYAPP_UPLOAD_STORE_FILE, MYAPP_UPLOAD_STORE_PASSWORD
+  - MYAPP_UPLOAD_KEY_ALIAS, MYAPP_UPLOAD_KEY_PASSWORD
