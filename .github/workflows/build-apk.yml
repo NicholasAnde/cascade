@@ -1,10 +1,10 @@
 name: Build Private APK
 
 on:
-  # Manual run button in Actions
+  # Manual run button in the Actions tab
   workflow_dispatch:
 
-  # Auto-run when you publish a Release
+  # Auto-run when you publish a Release in GitHub UI
   release:
     types: [published]
 
@@ -16,27 +16,33 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # Prevents “stuck for hours” runs
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --- Sanity checks so we fail fast with a clear message ---
       - name: Verify Android wrapper exists
         run: |
           if [ ! -d "android/app/src/main" ]; then
-            echo "::error::android/ wrapper not found at repo root. Add the WebView Gradle project under android/."
+            echo "::error::android/ wrapper not found at repo root. Expected android/app/src/main/**"
+            exit 1
+          fi
+          if [ ! -f "android/gradlew" ]; then
+            echo "::error::Gradle wrapper script (android/gradlew) is missing."
             exit 1
           fi
 
-            - name: Prepare assets (ensure index.html and app.settings.json)
+      # Prepare assets: copy index.html; make settings from secret if needed
+      - name: Prepare assets (ensure index.html and app.settings.json)
         env:
           SHEETS_ENDPOINT: ${{ secrets.SHEETS_ENDPOINT }}
         run: |
           set -e
-          # Always create the assets folder
           mkdir -p android/app/src/main/assets
 
-          # Copy index.html from repo root
+          # index.html must exist at repo root (same level as android/ and .github/)
           if [ -f "index.html" ]; then
             cp index.html android/app/src/main/assets/index.html
             echo "Copied index.html into assets/"
@@ -45,7 +51,7 @@ jobs:
             exit 1
           fi
 
-          # Handle app.settings.json
+          # app.settings.json - use file if present; else generate from secret
           if [ -f "app.settings.json" ]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
             echo "Copied app.settings.json into assets/"
@@ -71,6 +77,13 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      # Accept licenses + install the exact SDK & build-tools versions your build needs
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      # Decode your signing keystore from GitHub Secrets
       - name: Decode keystore
         run: |
           set -e
@@ -81,6 +94,7 @@ jobs:
           echo "${{ secrets.KEYSTORE }}" | base64 -d > android/keystore.jks
           ls -l android/keystore.jks
 
+      # Write signing values into android/gradle.properties (no heredocs)
       - name: Configure signing (gradle.properties)
         run: |
           {
@@ -94,16 +108,21 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew || true
 
-      - name: Build release
-        working-directory: android
-        run: ./gradlew assembleRelease
+      # Use Gradle build action (caching + better logs)
+      - name: Build release (Gradle cached)
+        uses: gradle/gradle-build-action@v3
+        with:
+          arguments: assembleRelease --stacktrace --no-daemon
+          build-root-directory: android
 
-      - name: Upload APK artifact (manual/push runs)
+      # For manual/push runs, keep an artifact on the run page
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: cascade_canvass_apk
           path: android/app/build/outputs/apk/release/*.apk
 
+  # When you publish a tag or GitHub Release, attach the APK
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
