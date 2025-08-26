@@ -80,12 +80,12 @@ jobs:
 
       - name: Configure signing (gradle.properties)
         run: |
-          cat >> android/gradle.properties <<EOF
-MYAPP_UPLOAD_STORE_FILE=keystore.jks
-MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
-MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
-MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_ALIAS_PASSWORD }}
-EOF
+          {
+            echo "MYAPP_UPLOAD_STORE_FILE=keystore.jks"
+            echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}"
+            echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}"
+            echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_ALIAS_PASSWORD }}"
+          } >> android/gradle.properties
           echo "gradle.properties configured."
 
       - name: Grant gradlew execute
