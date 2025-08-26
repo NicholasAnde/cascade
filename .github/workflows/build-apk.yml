@@ -1,15 +1,12 @@
 name: Build Private APK
 
 on:
-  # Add this block so you can run it from the Actions tab
-  workflow_dispatch:
-
-  # (optional: still keep your auto triggers)
-  push:
-    branches: ["main", "release/*"]
-    tags: ["v*"]
+  workflow_dispatch:        # Manual run button in Actions
   release:
-    types: [published]
+    types: [published]      # Auto-run when you Publish a Release
+  push:
+    branches: ["main"]      # Also run on pushes to main
+    tags: ["v*"]            # And on version tags
 
 jobs:
   build:
@@ -18,12 +15,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Copy your web UI + settings into the Android wrapper
-      - name: Copy web assets into Android wrapper
+      - name: Verify Android wrapper exists
         run: |
+          if [ ! -d "android/app/src/main" ]; then
+            echo "::error::android/ wrapper not found. Ensure android/ is at repo root with Gradle project."
+            exit 1
+          fi
+
+      - name: Prepare assets (ensure index.html and app.settings.json)
+        env:
+          SHEETS_ENDPOINT: ${{ secrets.SHEETS_ENDPOINT }}
+        run: |
+          set -e
           mkdir -p android/app/src/main/assets
-          cp index.html android/app/src/main/assets/index.html
-          cp app.settings.json android/app/src/main/assets/app.settings.json
+
+          # index.html must be at repo root
+          if [ -f "index.html" ]; then
+            cp index.html android/app/src/main/assets/index.html
+          else
+            echo "::error::index.html not found at repo root. Place your built app index.html at repo root."
+            exit 1
+          fi
+
+          # app.settings.json: use file if present, else create from secret
+          if [ -f "app.settings.json" ]; then
+            cp app.settings.json android/app/src/main/assets/app.settings.json
+          else
+            if [ -n "$SHEETS_ENDPOINT" ]; then
+              cat > android/app/src/main/assets/app.settings.json <<EOF
+              {
+                "sheetsEndpoint": "${SHEETS_ENDPOINT}",
+                "cooldownDays": 90
+              }
+              EOF
+              echo "Created app.settings.json from SHEETS_ENDPOINT secret."
+            else
+              echo "::error::app.settings.json missing AND SHEETS_ENDPOINT secret not set. Provide one of them."
+              exit 1
+            fi
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -34,14 +64,16 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # Decode keystore from secret
       - name: Decode keystore
         run: |
-          mkdir -p android
+          set -e
+          if [ -z "${{ secrets.KEYSTORE }}" ]; then
+            echo "::error::KEYSTORE secret is missing (Base64 of your .keystore)."
+            exit 1
+          fi
           echo "${{ secrets.KEYSTORE }}" | base64 -d > android/keystore.jks
 
-      # Configure Gradle signing from secrets
-      - name: Configure signing
+      - name: Configure signing (gradle.properties)
         run: |
           cat >> android/gradle.properties <<EOF
           MYAPP_UPLOAD_STORE_FILE=keystore.jks
@@ -57,17 +89,15 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease
 
-      # Always publish the built APK as a workflow artifact (useful for branch builds)
-      - name: Upload APK artifact
+      - name: Upload APK artifact (for manual/push runs)
         uses: actions/upload-artifact@v4
         with:
           name: cascade_canvass_apk
           path: android/app/build/outputs/apk/release/*.apk
 
-  # If a tag (v*) is pushed or a Release is published, attach the APK to the Release
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Download artifact
