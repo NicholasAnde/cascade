@@ -1,10 +1,10 @@
 name: Build Private APK
 
 on:
-  # Manual run from Actions tab
+  # Manual run button in Actions
   workflow_dispatch:
 
-  # Auto-run when you publish a GitHub Release
+  # Auto-run when you publish a Release
   release:
     types: [published]
 
@@ -16,6 +16,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +24,7 @@ jobs:
       - name: Verify Android wrapper exists
         run: |
           if [ ! -d "android/app/src/main" ]; then
-            echo "::error::android/ wrapper not found. Ensure android/ is at repo root with a Gradle project."
+            echo "::error::android/ wrapper not found at repo root. Add the WebView Gradle project under android/."
             exit 1
           fi
 
@@ -34,7 +35,7 @@ jobs:
           set -e
           mkdir -p android/app/src/main/assets
 
-          # index.html must be at repo root
+          # index.html must be at repo root (the app UI)
           if [ -f "index.html" ]; then
             cp index.html android/app/src/main/assets/index.html
           else
@@ -42,16 +43,15 @@ jobs:
             exit 1
           fi
 
-          # app.settings.json: use file if present, else create from secret
+          # app.settings.json: use file if present; else create from secret
           if [ -f "app.settings.json" ]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
             if [ -n "$SHEETS_ENDPOINT" ]; then
-              cat > android/app/src/main/assets/app.settings.json <<EOF
-{
-  "sheetsEndpoint": "${SHEETS_ENDPOINT}",
-  "cooldownDays": 90
-}EOF
+              printf '%s\n' '{' \
+                "  \"sheetsEndpoint\": \"${SHEETS_ENDPOINT}\"," \
+                '  "cooldownDays": 90' \
+              '}' > android/app/src/main/assets/app.settings.json
               echo "Created app.settings.json from SHEETS_ENDPOINT secret."
             else
               echo "::error::app.settings.json missing AND SHEETS_ENDPOINT secret not set."
@@ -72,10 +72,11 @@ jobs:
         run: |
           set -e
           if [ -z "${{ secrets.KEYSTORE }}" ]; then
-            echo "::error::KEYSTORE secret is missing (Base64 of your .keystore)."
+            echo "::error::KEYSTORE secret (Base64 keystore) is missing."
             exit 1
           fi
           echo "${{ secrets.KEYSTORE }}" | base64 -d > android/keystore.jks
+          ls -l android/keystore.jks
 
       - name: Configure signing (gradle.properties)
         run: |
@@ -85,6 +86,7 @@ MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
 MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
 MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_ALIAS_PASSWORD }}
 EOF
+          echo "gradle.properties configured."
 
       - name: Grant gradlew execute
         run: chmod +x android/gradlew || true
@@ -93,7 +95,7 @@ EOF
         working-directory: android
         run: ./gradlew assembleRelease
 
-      - name: Upload APK artifact (for manual/push runs)
+      - name: Upload APK artifact (manual/push runs)
         uses: actions/upload-artifact@v4
         with:
           name: cascade_canvass_apk
@@ -101,7 +103,6 @@ EOF
 
   release:
     needs: build
-    # Run this job for version tags (v*) or when GitHub Release is published
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
