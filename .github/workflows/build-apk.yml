@@ -51,8 +51,7 @@ jobs:
 {
   "sheetsEndpoint": "${SHEETS_ENDPOINT}",
   "cooldownDays": 90
-}
-EOF
+}EOF
               echo "Created app.settings.json from SHEETS_ENDPOINT secret."
             else
               echo "::error::app.settings.json missing AND SHEETS_ENDPOINT secret not set."
