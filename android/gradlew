@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -f "$DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
+  mkdir -p "$DIR/gradle/wrapper"
+  curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o "$DIR/gradle-8.7-bin.zip"
+  unzip -p "$DIR/gradle-8.7-bin.zip" gradle-8.7/lib/gradle-launcher-8.7.jar > "$DIR/gradle/wrapper/gradle-wrapper.jar" || true
+fi
+exec "$DIR/gradlew" "$@"
