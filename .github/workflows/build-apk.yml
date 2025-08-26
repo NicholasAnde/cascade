@@ -1,6 +1,17 @@
 name: Build Private APK
 
 on:
+  # Add this block so you can run it from the Actions tab
+  workflow_dispatch:
+
+  # (optional: still keep your auto triggers)
+  push:
+    branches: ["main", "release/*"]
+    tags: ["v*"]
+  release:
+    types: [published]
+
+on:
   push:
     branches: ["release/*"]
     tags: ["v*"]
