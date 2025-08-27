@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace 'com.cascade.canvass'
+    namespace "com.cascade.canvass"
     compileSdk 34
 
     defaultConfig {
@@ -12,34 +12,30 @@ android {
         minSdk 24
         targetSdk 34
         versionCode 1
-        versionName "1.0.0"
-        vectorDrawables { useSupportLibrary true }
-    }
-
-    signingConfigs {
-        release {
-            storeFile file("keystore.jks")
-            storePassword System.getenv("MYAPP_UPLOAD_STORE_PASSWORD")
-            keyAlias System.getenv("MYAPP_UPLOAD_KEY_ALIAS")
-            keyPassword System.getenv("MYAPP_UPLOAD_KEY_PASSWORD")
-        }
+        versionName "1.0"
     }
 
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
+            // if signing via gradle.properties exists, wire it:
+            if (project.hasProperty("MYAPP_STORE_FILE")) {
+                signingConfig signingConfigs.create("release") {
+                    storeFile file(MYAPP_STORE_FILE)
+                    storePassword MYAPP_STORE_PASSWORD
+                    keyAlias MYAPP_KEY_ALIAS
+                    keyPassword MYAPP_KEY_PASSWORD
+                }
+            }
         }
-        debug { minifyEnabled false }
     }
-
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    kotlinOptions { jvmTarget = '17' }
 }
-
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'androidx.webkit:webkit:1.11.0'
     implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    // your WebView or other deps if used:
+    implementation 'androidx.webkit:webkit:1.11.0'
 }
+
