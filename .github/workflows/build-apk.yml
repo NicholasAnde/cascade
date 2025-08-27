@@ -55,30 +55,44 @@ jobs:
             echo "Gradle wrapper present."
           fi
 
-      - name: Prepare assets (index.html & app.settings.json)
+           - name: Prepare assets (index.html & app.settings.json)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p android/app/src/main/assets
+          
+          # index.html
           if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
           else
             echo "::warning::No index.html at repo root; creating placeholder"
-            cat > android/app/src/main/assets/index.html <<'HTML'
-            <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-            <title>Cascade</title></head><body><h1>Placeholder UI</h1></body></html>
-            HTML
+            cat > android/app/src/main/assets/index.html <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Cascade</title>
+  </head>
+  <body>
+    <h1>Placeholder UI</h1>
+  </body>
+</html>
+EOF
           fi
+
+          # app.settings.json
           if [[ -f "app.settings.json" ]]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
             echo "::notice::Creating app.settings.json from env"
-            cat > android/app/src/main/assets/app.settings.json <<JSON
-            {
-              "sheetsEndpoint": "${SHEETS_ENDPOINT:-""}"
-            }
-            JSON
+            cat > android/app/src/main/assets/app.settings.json <<EOF
+{
+  "sheetsEndpoint": "${SHEETS_ENDPOINT:-""}"
+}
+EOF
           fi
+
           ls -la android/app/src/main/assets
 
       - name: Set up JDK 17
