@@ -113,7 +113,7 @@ jobs:
             } >> "$PROP_FILE"
             echo "Signing props set with path app/upload.keystore"
           else
-            echo "::notice::Signing secrets missing; Release will be unsigned, but Debug will still build."
+            echo "::notice::Signing secrets missing; Release may be unsigned (Debug will still build)."
           fi
           grep -q '^android.useAndroidX=' "$PROP_FILE" || echo 'android.useAndroidX=true' >> "$PROP_FILE"
           grep -q '^android.enableJetifier=' "$PROP_FILE" || echo 'android.enableJetifier=true' >> "$PROP_FILE"
@@ -121,7 +121,7 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      # Disable Gradle cache to avoid post-step cache failures
+      # Disable Gradle cache to avoid cache-service issues
       - name: Setup Gradle (no cache; avoid post-step failure)
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -144,9 +144,11 @@ jobs:
         id: find_debug_apk
         run: |
           set -euo pipefail
-          DAPK=$(find android/app/build/outputs/apk/debug -name "*-debug.apk" -type f | head -n 1 || true)
+          echo "Listing debug outputs in android/app/build/outputs/apk/debug:"
+          ls -la android/app/build/outputs/apk/debug || true
+          DAPK=$(find android/app/build/outputs/apk/debug -type f -name "*-debug.apk" -print -quit)
           if [[ -z "$DAPK" ]]; then
-            echo "::error::Debug APK not found"
+            echo "::error::Debug APK not found in android/app/build/outputs/apk/debug"
             exit 1
           fi
           echo "debug_apk=$DAPK" >> "$GITHUB_OUTPUT"
@@ -179,24 +181,38 @@ jobs:
           echo "===== grep FAILURE / ERROR ====="
           (grep -n -E 'FAILURE:|^> Task .* FAILED|^Caused by:|error: ' android/build-logs/assembleRelease.log || true)
 
-      - name: Locate Release APK
+      - name: Locate Release APK (robust)
         id: find_release_apk
+        shell: bash
         run: |
           set -euo pipefail
-          RAPK=$(find android/app/build/outputs/apk/release -name "*-release.apk" -type f | head -n 1 || true)
+          REL_DIR="android/app/build/outputs/apk/release"
+          echo "Listing release outputs in $REL_DIR:"
+          ls -la "$REL_DIR" || true
+
+          # Prefer signed release; fallback to unsigned if signing skipped
+          RAPK=$(find "$REL_DIR" -type f -name "*-release.apk" -print -quit)
           if [[ -z "$RAPK" ]]; then
-            echo "::error::Release APK not found"
+            RAPK=$(find "$REL_DIR" -type f -name "*-release-unsigned.apk" -print -quit)
+          fi
+
+          if [[ -z "$RAPK" ]]; then
+            echo "::error::Release APK not found in $REL_DIR"
             exit 1
           fi
           echo "release_apk=$RAPK" >> "$GITHUB_OUTPUT"
           echo "Found Release APK at $RAPK"
 
       # Verify only the Release APK signature (Debug uses debug keystore)
-      - name: Verify Release APK signature
+      - name: Verify Release APK signature (skip if unsigned)
         shell: bash
         run: |
           set -euo pipefail
           APK="${{ steps.find_release_apk.outputs.release_apk }}"
+          if [[ "$APK" == *"-unsigned.apk" ]]; then
+            echo "::notice::Release APK is unsigned (no secrets). Skipping signature verification."
+            exit 0
+          fi
           TOOL="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
           if [[ ! -x "$TOOL" ]]; then
             TOOL="$(command -v apksigner || true)"
