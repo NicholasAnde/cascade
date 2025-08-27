@@ -21,8 +21,6 @@ jobs:
       ANDROID_PLATFORM_TOOLS: "platform-tools"
       GRADLE_VERSION: "8.7"
       GRADLE_OPTS: "-Dorg.gradle.caching.debug=true -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'"
-
-      # Map secrets (empty if undefined)
       KEYSTORE_B64: ${{ secrets.KEYSTORE }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -36,7 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Bootstrap Gradle wrapper if gradlew/.jar missing (safety net)
       - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
@@ -50,7 +47,6 @@ jobs:
             yes | sdk install gradle "${GRADLE_VERSION}"
             ( cd android && gradle wrapper --gradle-version "${GRADLE_VERSION}" )
             chmod +x android/gradlew
-            ls -la android/gradle/wrapper || true
           else
             echo "Gradle wrapper present."
           fi
@@ -60,23 +56,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p android/app/src/main/assets
-
-          # index.html
           if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
           else
-            echo "::warning::No index.html at repo root; creating placeholder"
             printf '%s\n' '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cascade</title></head><body><h1>Placeholder UI</h1></body></html>' > android/app/src/main/assets/index.html
           fi
-
-          # app.settings.json
           if [[ -f "app.settings.json" ]]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
-            echo "::notice::Creating app.settings.json from env"
             printf '%s\n' "{\"sheetsEndpoint\":\"${SHEETS_ENDPOINT:-}\"}" > android/app/src/main/assets/app.settings.json
           fi
-
           ls -la android/app/src/main/assets
 
       - name: Set up JDK 17
@@ -88,18 +77,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK components
+      - name: Install Android SDK components (robust)
+        shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "${ANDROID_SDK_PLATFORM}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_PLATFORM_TOOLS}"
+          Pkgs=( "${ANDROID_PLATFORM_TOOLS}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_SDK_PLATFORM}" )
+          for p in "${Pkgs[@]}"; do
+            echo "Installing $p ..."
+            sdkmanager "$p" || { echo "Retry $p after short sleep"; sleep 5; sdkmanager "$p"; }
+          done
+          # Accept licenses non-interactively; ignore pipe break exit
+          yes "y" | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Decode keystore (guarded)
         shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${KEYSTORE_B64:-}" ]]; then
-            echo "Decoding keystore..."
             echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
           else
             echo "::notice::No KEYSTORE secret set; continuing unsigned build."
