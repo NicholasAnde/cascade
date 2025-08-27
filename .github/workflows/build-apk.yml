@@ -34,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Bootstrap Gradle wrapper if gradlew/.jar missing (safety net)
+      # Safety net: bootstrap Gradle wrapper if missing
       - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
@@ -92,7 +92,7 @@ jobs:
             echo "Installing $p ..."
             sdkmanager "$p" || { echo "Retry $p after short sleep"; sleep 5; sdkmanager "$p"; }
           done
-          # Accept licenses non-interactively; ignore pipe break exit
+          # Accept licenses non-interactively; ignore pipe-break exit
           yes "y" | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Decode keystore (guarded)
@@ -126,6 +126,7 @@ jobs:
       - name: Ensure AndroidX flags (safety)
         shell: bash
         run: |
+          set -euo pipefail
           touch android/gradle.properties
           grep -q '^android.useAndroidX=' android/gradle.properties || echo 'android.useAndroidX=true' >> android/gradle.properties
           grep -q '^android.enableJetifier=' android/gradle.properties || echo 'android.enableJetifier=true' >> android/gradle.properties
@@ -133,15 +134,11 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      - name: Setup Gradle (cache)
+      # Cache disabled to avoid service outage failures in post-step
+      - name: Setup Gradle (no cache; avoid post-step failure)
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-home-cache-includes: |
-            caches
-            notifications
-            jdks
-          gradle-home-cache-excludes: |
-            caches/build-cache-*
+          cache-disabled: true
 
       - name: Pre-warm Gradle deps
         working-directory: android
