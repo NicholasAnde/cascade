@@ -34,6 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Safety net: create Gradle wrapper if repo is missing it
       - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
@@ -88,80 +89,38 @@ jobs:
           done
           yes "y" | sdkmanager --licenses >/dev/null 2>&1 || true
 
-      - name: Decode keystore (guarded)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${KEYSTORE_B64:-}" ]]; then
-            echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
-          else
-            echo "::notice::No KEYSTORE secret set; continuing unsigned build."
-          fi
-
       - name: Configure signing (gradle.properties, guarded)
         shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_ALIAS_PASSWORD: ${{ secrets.KEY_ALIAS_PASSWORD }}
         run: |
           set -euo pipefail
           PROP_FILE="android/gradle.properties"
-          touch "$PROP_FILE"
-          if [[ -n "${KEYSTORE_PASSWORD:-}" && -n "${KEY_ALIAS:-}" && -n "${KEY_ALIAS_PASSWORD:-}" && -f "android/app/upload.keystore" ]]; then
+          ( [[ -f "$PROP_FILE" ]] && grep -v '^MYAPP_' "$PROP_FILE" || true ) > "$PROP_FILE.tmp" || true
+          mv "$PROP_FILE.tmp" "$PROP_FILE"
+          if [[ -n "${KEYSTORE_B64:-}" && -n "${KEYSTORE_PASSWORD:-}" && -n "${KEY_ALIAS:-}" && -n "${KEY_ALIAS_PASSWORD:-}" ]]; then
+            echo "Decoding keystore to android/app/upload.keystore"
+            echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
             {
               echo "MYAPP_STORE_FILE=app/upload.keystore"
               echo "MYAPP_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
               echo "MYAPP_KEY_ALIAS=${KEY_ALIAS}"
               echo "MYAPP_KEY_PASSWORD=${KEY_ALIAS_PASSWORD}"
             } >> "$PROP_FILE"
-            echo "Signing properties appended to $PROP_FILE"
+            echo "Signing props set with path app/upload.keystore"
           else
-            echo "::notice::Signing props not set or keystore missing; APK will be unsigned."
+            echo "::notice::Signing secrets missing; build will be unsigned."
           fi
-
-      - name: Ensure AndroidX flags (safety)
-        shell: bash
-        run: |
-          set -euo pipefail
-          touch android/gradle.properties
-          grep -q '^android.useAndroidX=' android/gradle.properties || echo 'android.useAndroidX=true' >> android/gradle.properties
-          grep -q '^android.enableJetifier=' android/gradle.properties || echo 'android.enableJetifier=true' >> android/gradle.properties
-
-- name: Configure signing (gradle.properties, guarded)
-  shell: bash
-  env:
-    # expects these to be set as GitHub repo secrets
-    KEYSTORE_B64: ${{ secrets.KEYSTORE }}
-    KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-    KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-    KEY_ALIAS_PASSWORD: ${{ secrets.KEY_ALIAS_PASSWORD }}
-  run: |
-    set -euo pipefail
-    PROP_FILE="android/gradle.properties"
-
-    # 1) Start from current file but drop ANY previous signing lines (prevent bad paths)
-    ( [[ -f "$PROP_FILE" ]] && grep -v '^MYAPP_' "$PROP_FILE" || true ) > "$PROP_FILE.tmp" || true
-    mv "$PROP_FILE.tmp" "$PROP_FILE"
-
-    # 2) Only configure signing if ALL secrets exist; write keystore to a known path
-    if [[ -n "${KEYSTORE_B64:-}" && -n "${KEYSTORE_PASSWORD:-}" && -n "${KEY_ALIAS:-}" && -n "${KEY_ALIAS_PASSWORD:-}" ]]; then
-      echo "Decoding keystore to android/app/upload.keystore"
-      echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
-      {
-        echo "MYAPP_STORE_FILE=app/upload.keystore"
-        echo "MYAPP_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
-        echo "MYAPP_KEY_ALIAS=${KEY_ALIAS}"
-        echo "MYAPP_KEY_PASSWORD=${KEY_ALIAS_PASSWORD}"
-      } >> "$PROP_FILE"
-      echo "Signing props set with path app/upload.keystore"
-    else
-      echo "::notice::Signing secrets missing; build will be unsigned."
-    fi
-
-    # 3) Ensure AndroidX flags (idempotent)
-    grep -q '^android.useAndroidX=' "$PROP_FILE" || echo 'android.useAndroidX=true' >> "$PROP_FILE"
-    grep -q '^android.enableJetifier=' "$PROP_FILE" || echo 'android.enableJetifier=true' >> "$PROP_FILE"
+          grep -q '^android.useAndroidX=' "$PROP_FILE" || echo 'android.useAndroidX=true' >> "$PROP_FILE"
+          grep -q '^android.enableJetifier=' "$PROP_FILE" || echo 'android.enableJetifier=true' >> "$PROP_FILE"
 
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
+      # Disable cache to avoid cache-service outages breaking the job
       - name: Setup Gradle (no cache; avoid post-step failure)
         uses: gradle/actions/setup-gradle@v3
         with:
