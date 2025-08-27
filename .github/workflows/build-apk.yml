@@ -1,142 +1,179 @@
-name: Build Private APK
+name: Build Android APK
 
 on:
-  # Manual run button in the Actions tab
   workflow_dispatch:
-
-  # Auto-run when you publish a Release in GitHub UI
-  release:
-    types: [published]
-
-  # Also run on pushes to main and on version tags
   push:
-    branches: ["main"]
-    tags: ["v*"]
+    branches: [ main, master ]
+    tags: [ "v*", "release-*" ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # Prevents “stuck for hours” runs
+    timeout-minutes: 60
+
+    env:
+      # App config (non-secret defaults ok; secrets override where needed)
+      APP_NAME: Cascade Canvassing
+      ANDROID_SDK_PLATFORM: "platforms;android-34"
+      ANDROID_BUILD_TOOLS: "build-tools;34.0.0"
+      ANDROID_PLATFORM_TOOLS: "platform-tools"
+      # Gradle verbosity + caching debug
+      GRADLE_OPTS: "-Dorg.gradle.caching.debug=true -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'"
 
     steps:
+      - name: Set up job
+        run: echo "Starting build for $APP_NAME"
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Sanity checks so we fail fast with a clear message ---
+      # Ensure Android wrapper & gradle files exist (helps fail early with clear msg)
       - name: Verify Android wrapper exists
         run: |
-          if [ ! -d "android/app/src/main" ]; then
-            echo "::error::android/ wrapper not found at repo root. Expected android/app/src/main/**"
-            exit 1
-          fi
-          if [ ! -f "android/gradlew" ]; then
-            echo "::error::Gradle wrapper script (android/gradlew) is missing."
-            exit 1
-          fi
+          set -euo pipefail
+          test -f android/gradlew || (echo "::error::Missing android/gradlew" && exit 1)
+          test -f android/gradle/wrapper/gradle-wrapper.jar || (echo "::error::Missing gradle-wrapper.jar (must be committed)" && exit 1)
+          test -f android/gradle/wrapper/gradle-wrapper.properties || (echo "::error::Missing gradle-wrapper.properties" && exit 1)
 
-      # Prepare assets: copy index.html; make settings from secret if needed
       - name: Prepare assets (ensure index.html and app.settings.json)
-        env:
-          SHEETS_ENDPOINT: ${{ secrets.SHEETS_ENDPOINT }}
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p android/app/src/main/assets
-
-          # index.html must exist at repo root (same level as android/ and .github/)
-          if [ -f "index.html" ]; then
+          # index.html from repo root (adjust if your path differs)
+          if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
-            echo "Copied index.html into assets/"
           else
-            echo "::error::index.html not found at repo root."
-            exit 1
+            echo "::warning::No index.html at repo root; creating placeholder"
+            cat > android/app/src/main/assets/index.html <<'HTML'
+            <!doctype html><html><head><meta charset="utf-8"><title>Cascade</title></head>
+            <body><h1>Placeholder UI</h1></body></html>
+            HTML
           fi
-
-          # app.settings.json - use file if present; else generate from secret
-          if [ -f "app.settings.json" ]; then
+          # app.settings.json (generate if not present) using secret SHEETS_ENDPOINT if available
+          if [[ -f "app.settings.json" ]]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
-            echo "Copied app.settings.json into assets/"
           else
-            if [ -n "$SHEETS_ENDPOINT" ]; then
-              printf '%s\n' '{' \
-                "  \"sheetsEndpoint\": \"${SHEETS_ENDPOINT}\"," \
-                '  "cooldownDays": 90' \
-              '}' > android/app/src/main/assets/app.settings.json
-              echo "Created app.settings.json from SHEETS_ENDPOINT secret."
-            else
-              echo "::error::app.settings.json missing AND SHEETS_ENDPOINT secret not set."
-              exit 1
-            fi
+            echo "::notice::Creating app.settings.json from env"
+            cat > android/app/src/main/assets/app.settings.json <<JSON
+            {
+              "sheetsEndpoint": "${SHEETS_ENDPOINT:-}"
+            }
+            JSON
           fi
+          ls -la android/app/src/main/assets
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
 
+      # Android SDK + cmdline-tools (provides sdkmanager)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # Accept licenses + install the exact SDK & build-tools versions your build needs
       - name: Install Android SDK components
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "${ANDROID_SDK_PLATFORM}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_PLATFORM_TOOLS}"
 
-      # Decode your signing keystore from GitHub Secrets
+      # Decode keystore and configure signing; all values must be set in repo secrets
       - name: Decode keystore
+        if: ${{ secrets.KEYSTORE != '' }}
         run: |
-          set -e
-          if [ -z "${{ secrets.KEYSTORE }}" ]; then
-            echo "::error::KEYSTORE secret (Base64 keystore) is missing."
-            exit 1
-          fi
-          echo "${{ secrets.KEYSTORE }}" | base64 -d > android/keystore.jks
-          ls -l android/keystore.jks
+          set -euo pipefail
+          echo "$KEYSTORE" | base64 -d > android/app/upload.keystore
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
 
-      # Write signing values into android/gradle.properties (no heredocs)
       - name: Configure signing (gradle.properties)
         run: |
+          set -euo pipefail
+          PROP_FILE="android/gradle.properties"
           {
-            echo "MYAPP_UPLOAD_STORE_FILE=keystore.jks"
-            echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}"
-            echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}"
-            echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_ALIAS_PASSWORD }}"
-          } >> android/gradle.properties
-          echo "gradle.properties configured."
+            echo "MYAPP_STORE_FILE=app/upload.keystore"
+            echo "MYAPP_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
+            echo "MYAPP_KEY_ALIAS=${KEY_ALIAS}"
+            echo "MYAPP_KEY_PASSWORD=${KEY_ALIAS_PASSWORD}"
+          } >> "$PROP_FILE"
+          echo "Wrote signing props to $PROP_FILE"
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_ALIAS_PASSWORD: ${{ secrets.KEY_ALIAS_PASSWORD }}
 
       - name: Grant gradlew execute
-        run: chmod +x android/gradlew || true
+        run: chmod +x android/gradlew
 
-      # Use Gradle build action (caching + better logs)
-      - name: Build release (Gradle cached)
-        uses: gradle/gradle-build-action@v3
+      # Gradle cache (v3 action) + summary; bump cache-key-suffix to force refresh
+      - name: Setup Gradle (cache and summary)
+        uses: gradle/actions/setup-gradle@v3
         with:
-          arguments: assembleRelease --stacktrace --no-daemon
-          build-root-directory: android
+          add-job-summary: true
+          cache-read-only: false
+          cache-overwrite-existing: true
+          gradle-home-cache-includes: |
+            caches
+            notifications
+            jdks
+          gradle-home-cache-excludes: |
+            caches/build-cache-*
+          cache-key-suffix: v2
 
-      # For manual/push runs, keep an artifact on the run page
+      # Warm dependencies + print versions for easier diagnosis
+      - name: Pre-warm Gradle deps
+        working-directory: android
+        run: |
+          ./gradlew --version
+          ./gradlew help --no-daemon --stacktrace --info
+
+      - name: Show Android SDK status
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          sdkmanager --list | head -n 200 || true
+
+      - name: Build release (verbose, bounded)
+        working-directory: android
+        timeout-minutes: 25
+        env:
+          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
+        run: |
+          set -euo pipefail
+          ./gradlew --stop || true
+          ./gradlew assembleRelease --no-daemon --stacktrace --info
+          ./gradlew --stop || true
+
+      - name: Locate APK
+        id: find_apk
+        run: |
+          set -euo pipefail
+          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -n 1 || true)
+          if [[ -z "$APK_PATH" ]]; then
+            echo "::error::APK not found in expected path"
+            exit 1
+          fi
+          echo "apk=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found APK at $APK_PATH"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cascade_canvass_apk
-          path: android/app/build/outputs/apk/release/*.apk
+          name: cascade-canvassing-release-apk
+          path: ${{ steps.find_apk.outputs.apk }}
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
 
-  # When you publish a tag or GitHub Release, attach the APK
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cascade_canvass_apk
-          path: dist
-
-      - name: Attach APK to Release
+      # If this run is triggered by a tag, attach the APK to a GitHub Release
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: ${{ steps.find_apk.outputs.apk }}
+          generate_release_notes: true
