@@ -20,6 +20,12 @@ jobs:
       ANDROID_BUILD_TOOLS: "build-tools;34.0.0"
       ANDROID_PLATFORM_TOOLS: "platform-tools"
       GRADLE_OPTS: "-Dorg.gradle.caching.debug=true -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'"
+      # Map secrets to env (empty if undefined)
+      KEYSTORE_B64: ${{ secrets.KEYSTORE }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_ALIAS_PASSWORD: ${{ secrets.KEY_ALIAS_PASSWORD }}
+      SHEETS_ENDPOINT: ${{ secrets.SHEETS_ENDPOINT }}
 
     steps:
       - name: Set up job
@@ -76,31 +82,33 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "${ANDROID_SDK_PLATFORM}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_PLATFORM_TOOLS}"
 
-      # Only run signing if secrets are present
-      - name: Decode keystore
-        if: ${{ secrets.KEYSTORE != '' }}
+      - name: Decode keystore (guarded)
         run: |
           set -euo pipefail
-          echo "$KEYSTORE" | base64 -d > android/app/upload.keystore
-        env:
-          KEYSTORE: ${{ secrets.KEYSTORE }}
+          if [[ -n "${KEYSTORE_B64:-}" ]]; then
+            echo "Decoding keystore..."
+            echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
+            ls -la android/app | sed -n '1,50p'
+          else
+            echo "::notice::No KEYSTORE secret set; continuing unsigned build."
+          fi
 
-      - name: Configure signing (gradle.properties)
-        if: ${{ secrets.KEYSTORE_PASSWORD != '' && secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS_PASSWORD != '' }}
+      - name: Configure signing (gradle.properties, guarded)
         run: |
           set -euo pipefail
           PROP_FILE="android/gradle.properties"
-          {
-            echo "MYAPP_STORE_FILE=app/upload.keystore"
-            echo "MYAPP_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
-            echo "MYAPP_KEY_ALIAS=${KEY_ALIAS}"
-            echo "MYAPP_KEY_PASSWORD=${KEY_ALIAS_PASSWORD}"
-          } >> "$PROP_FILE"
-          echo "Wrote signing props to $PROP_FILE"
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_ALIAS_PASSWORD: ${{ secrets.KEY_ALIAS_PASSWORD }}
+          touch "$PROP_FILE"
+          if [[ -n "${KEYSTORE_PASSWORD:-}" && -n "${KEY_ALIAS:-}" && -n "${KEY_ALIAS_PASSWORD:-}" && -f "android/app/upload.keystore" ]]; then
+            {
+              echo "MYAPP_STORE_FILE=app/upload.keystore"
+              echo "MYAPP_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
+              echo "MYAPP_KEY_ALIAS=${KEY_ALIAS}"
+              echo "MYAPP_KEY_PASSWORD=${KEY_ALIAS_PASSWORD}"
+            } >> "$PROP_FILE"
+            echo "Signing properties appended to $PROP_FILE"
+          else
+            echo "::notice::Signing props not set or keystore missing; APK will be unsigned (debuggable install via adb possible)."
+          fi
 
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
