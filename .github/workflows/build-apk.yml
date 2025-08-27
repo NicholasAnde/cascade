@@ -153,20 +153,25 @@ jobs:
           sdkmanager --list | head -n 200 || true
 
       - name: Prep build log
-        run: |
-          mkdir -p android/build-logs
+        run: mkdir -p android/build-logs
 
       - name: Build release (verbose, bounded)
         working-directory: android
         timeout-minutes: 25
-        env:
-          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
+        env: { GRADLE_OPTS: ${{ env.GRADLE_OPTS }} }
         run: |
           set -euo pipefail
           ./gradlew --stop || true
-          # run with max verbosity and tee into a file we can upload
           ./gradlew assembleRelease --no-daemon --stacktrace --info --warning-mode all --console=plain 2>&1 | tee build-logs/assembleRelease.log
           ./gradlew --stop || true
+
+      - name: Print last 500 lines of build log (on failure)
+        if: failure()
+        run: |
+          echo "===== tail assembleRelease.log ====="
+          tail -n 500 android/build-logs/assembleRelease.log || true
+          echo "===== grep FAILURE / ERROR ====="
+          (grep -n -E 'FAILURE:|^> Task .* FAILED|^Caused by:|error: ' android/build-logs/assembleRelease.log || true)
 
       - name: Upload build logs (always)
         if: always()
@@ -174,7 +179,6 @@ jobs:
         with:
           name: gradle-build-logs
           path: android/build-logs/**
-          if-no-files-found: ignore
           retention-days: 7
 
       - name: Build release (verbose, bounded)
