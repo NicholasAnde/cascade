@@ -152,6 +152,31 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           sdkmanager --list | head -n 200 || true
 
+      - name: Prep build log
+        run: |
+          mkdir -p android/build-logs
+
+      - name: Build release (verbose, bounded)
+        working-directory: android
+        timeout-minutes: 25
+        env:
+          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
+        run: |
+          set -euo pipefail
+          ./gradlew --stop || true
+          # run with max verbosity and tee into a file we can upload
+          ./gradlew assembleRelease --no-daemon --stacktrace --info --warning-mode all --console=plain 2>&1 | tee build-logs/assembleRelease.log
+          ./gradlew --stop || true
+
+      - name: Upload build logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-logs
+          path: android/build-logs/**
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build release (verbose, bounded)
         working-directory: android
         timeout-minutes: 25
