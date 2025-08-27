@@ -33,9 +33,6 @@ jobs:
       - name: Set up job
         run: echo "Starting build for $APP_NAME"
 
-      - name: Start
-        run: echo "Checkout repository"
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -63,25 +60,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p android/app/src/main/assets
-          
+
           # index.html
           if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
           else
             echo "::warning::No index.html at repo root; creating placeholder"
-            cat > android/app/src/main/assets/index.html <<'EOF'
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Cascade</title>
-  </head>
-  <body>
-    <h1>Placeholder UI</h1>
-  </body>
-</html>
-EOF
+            printf '%s\n' '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cascade</title></head><body><h1>Placeholder UI</h1></body></html>' > android/app/src/main/assets/index.html
           fi
 
           # app.settings.json
@@ -89,11 +74,7 @@ EOF
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
             echo "::notice::Creating app.settings.json from env"
-            cat > android/app/src/main/assets/app.settings.json <<EOF
-{
-  "sheetsEndpoint": "${SHEETS_ENDPOINT:-""}"
-}
-EOF
+            printf '%s\n' "{\"sheetsEndpoint\":\"${SHEETS_ENDPOINT:-}\"}" > android/app/src/main/assets/app.settings.json
           fi
 
           ls -la android/app/src/main/assets
