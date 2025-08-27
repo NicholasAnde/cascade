@@ -19,8 +19,10 @@ jobs:
       ANDROID_SDK_PLATFORM: "platforms;android-34"
       ANDROID_BUILD_TOOLS: "build-tools;34.0.0"
       ANDROID_PLATFORM_TOOLS: "platform-tools"
+      GRADLE_VERSION: "8.7"
       GRADLE_OPTS: "-Dorg.gradle.caching.debug=true -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'"
-      # Map secrets to env (empty if undefined)
+
+      # Map secrets (empty if undefined)
       KEYSTORE_B64: ${{ secrets.KEYSTORE }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -28,20 +30,32 @@ jobs:
       SHEETS_ENDPOINT: ${{ secrets.SHEETS_ENDPOINT }}
 
     steps:
-      - name: Set up job
+      - name: Start
         run: echo "Starting build for $APP_NAME"
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify Android wrapper exists
+      # Bootstrap Gradle wrapper if gradlew/.jar missing (safety net)
+      - name: Bootstrap Gradle wrapper if missing
+        shell: bash
         run: |
           set -euo pipefail
-          test -f android/gradlew || (echo "::error::Missing android/gradlew" && exit 1)
-          test -f android/gradle/wrapper/gradle-wrapper.jar || (echo "::error::Missing gradle-wrapper.jar (must be committed)" && exit 1)
-          test -f android/gradle/wrapper/gradle-wrapper.properties || (echo "::error::Missing gradle-wrapper.properties" && exit 1)
+          if [[ ! -f "android/gradlew" || ! -f "android/gradle/wrapper/gradle-wrapper.jar" ]]; then
+            echo "::notice::Gradle wrapper missing; bootstrapping with Gradle ${GRADLE_VERSION}..."
+            sudo apt-get update -y >/dev/null
+            sudo apt-get install -y zip unzip >/dev/null
+            curl -s "https://get.sdkman.io" | bash
+            source "$HOME/.sdkman/bin/sdkman-init.sh"
+            yes | sdk install gradle "${GRADLE_VERSION}"
+            ( cd android && gradle wrapper --gradle-version "${GRADLE_VERSION}" )
+            chmod +x android/gradlew
+            ls -la android/gradle/wrapper || true
+          else
+            echo "Gradle wrapper present."
+          fi
 
-      - name: Prepare assets (ensure index.html and app.settings.json)
+      - name: Prepare assets (index.html & app.settings.json)
         shell: bash
         run: |
           set -euo pipefail
@@ -51,8 +65,8 @@ jobs:
           else
             echo "::warning::No index.html at repo root; creating placeholder"
             cat > android/app/src/main/assets/index.html <<'HTML'
-            <!doctype html><html><head><meta charset="utf-8"><title>Cascade</title></head>
-            <body><h1>Placeholder UI</h1></body></html>
+            <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Cascade</title></head><body><h1>Placeholder UI</h1></body></html>
             HTML
           fi
           if [[ -f "app.settings.json" ]]; then
@@ -61,7 +75,7 @@ jobs:
             echo "::notice::Creating app.settings.json from env"
             cat > android/app/src/main/assets/app.settings.json <<JSON
             {
-              "sheetsEndpoint": "${SHEETS_ENDPOINT:-}"
+              "sheetsEndpoint": "${SHEETS_ENDPOINT:-""}"
             }
             JSON
           fi
@@ -83,17 +97,18 @@ jobs:
           sdkmanager "${ANDROID_SDK_PLATFORM}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_PLATFORM_TOOLS}"
 
       - name: Decode keystore (guarded)
+        shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${KEYSTORE_B64:-}" ]]; then
             echo "Decoding keystore..."
             echo "$KEYSTORE_B64" | base64 -d > android/app/upload.keystore
-            ls -la android/app | sed -n '1,50p'
           else
             echo "::notice::No KEYSTORE secret set; continuing unsigned build."
           fi
 
       - name: Configure signing (gradle.properties, guarded)
+        shell: bash
         run: |
           set -euo pipefail
           PROP_FILE="android/gradle.properties"
@@ -107,13 +122,13 @@ jobs:
             } >> "$PROP_FILE"
             echo "Signing properties appended to $PROP_FILE"
           else
-            echo "::notice::Signing props not set or keystore missing; APK will be unsigned (debuggable install via adb possible)."
+            echo "::notice::Signing props not set or keystore missing; APK will be unsigned."
           fi
 
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      - name: Setup Gradle (cache and summary)
+      - name: Setup Gradle (cache + summary)
         uses: gradle/actions/setup-gradle@v3
         with:
           add-job-summary: true
@@ -125,7 +140,7 @@ jobs:
             jdks
           gradle-home-cache-excludes: |
             caches/build-cache-*
-          cache-key-suffix: v2
+          cache-key-suffix: v3
 
       - name: Pre-warm Gradle deps
         working-directory: android
