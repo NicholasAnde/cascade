@@ -34,7 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Safety net: bootstrap Gradle wrapper if missing
       - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
@@ -57,21 +56,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p android/app/src/main/assets
-
-          # index.html
           if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
           else
             printf '%s\n' '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cascade</title></head><body><h1>Placeholder UI</h1></body></html>' > android/app/src/main/assets/index.html
           fi
-
-          # app.settings.json
           if [[ -f "app.settings.json" ]]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
             printf '%s\n' "{\"sheetsEndpoint\":\"${SHEETS_ENDPOINT:-}\"}" > android/app/src/main/assets/app.settings.json
           fi
-
           ls -la android/app/src/main/assets
 
       - name: Set up JDK 17
@@ -92,7 +86,6 @@ jobs:
             echo "Installing $p ..."
             sdkmanager "$p" || { echo "Retry $p after short sleep"; sleep 5; sdkmanager "$p"; }
           done
-          # Accept licenses non-interactively; ignore pipe-break exit
           yes "y" | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Decode keystore (guarded)
@@ -134,23 +127,10 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      # Cache disabled to avoid service outage failures in post-step
       - name: Setup Gradle (no cache; avoid post-step failure)
         uses: gradle/actions/setup-gradle@v3
         with:
           cache-disabled: true
-
-      - name: Pre-warm Gradle deps
-        working-directory: android
-        run: |
-          ./gradlew --version
-          ./gradlew help --no-daemon --stacktrace --info
-
-      - name: Show Android SDK status
-        run: |
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          sdkmanager --list | head -n 200 || true
 
       - name: Prep build log
         run: mkdir -p android/build-logs
@@ -158,7 +138,8 @@ jobs:
       - name: Build release (verbose, bounded)
         working-directory: android
         timeout-minutes: 25
-        env: { GRADLE_OPTS: ${{ env.GRADLE_OPTS }} }
+        env:
+          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
         run: |
           set -euo pipefail
           ./gradlew --stop || true
@@ -172,25 +153,6 @@ jobs:
           tail -n 500 android/build-logs/assembleRelease.log || true
           echo "===== grep FAILURE / ERROR ====="
           (grep -n -E 'FAILURE:|^> Task .* FAILED|^Caused by:|error: ' android/build-logs/assembleRelease.log || true)
-
-      - name: Upload build logs (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-build-logs
-          path: android/build-logs/**
-          retention-days: 7
-
-      - name: Build release (verbose, bounded)
-        working-directory: android
-        timeout-minutes: 25
-        env:
-          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
-        run: |
-          set -euo pipefail
-          ./gradlew --stop || true
-          ./gradlew assembleRelease --no-daemon --stacktrace --info
-          ./gradlew --stop || true
 
       - name: Locate APK
         id: find_apk
@@ -212,6 +174,14 @@ jobs:
           if-no-files-found: error
           compression-level: 6
           retention-days: 14
+
+      - name: Upload build logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-logs
+          path: android/build-logs/**
+          retention-days: 7
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
