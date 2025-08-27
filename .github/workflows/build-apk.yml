@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Release + Debug)
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Safety net: create Gradle wrapper if repo is missing it
+      # Safety net: create Gradle wrapper if missing in repo
       - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
@@ -89,6 +89,7 @@ jobs:
           done
           yes "y" | sdkmanager --licenses >/dev/null 2>&1 || true
 
+      # Configure signing for Release only (skips if secrets missing)
       - name: Configure signing (gradle.properties, guarded)
         shell: bash
         env:
@@ -112,7 +113,7 @@ jobs:
             } >> "$PROP_FILE"
             echo "Signing props set with path app/upload.keystore"
           else
-            echo "::notice::Signing secrets missing; build will be unsigned."
+            echo "::notice::Signing secrets missing; Release will be unsigned, but Debug will still build."
           fi
           grep -q '^android.useAndroidX=' "$PROP_FILE" || echo 'android.useAndroidX=true' >> "$PROP_FILE"
           grep -q '^android.enableJetifier=' "$PROP_FILE" || echo 'android.enableJetifier=true' >> "$PROP_FILE"
@@ -120,27 +121,57 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      # Disable cache to avoid cache-service outages breaking the job
+      # Disable Gradle cache to avoid post-step cache failures
       - name: Setup Gradle (no cache; avoid post-step failure)
         uses: gradle/actions/setup-gradle@v3
         with:
           cache-disabled: true
 
-      - name: Prep build log
+      - name: Prep build logs
         run: mkdir -p android/build-logs
 
-      - name: Build release (verbose, bounded)
+      # ---------- Build Debug (always) ----------
+      - name: Build Debug APK
+        working-directory: android
+        timeout-minutes: 20
+        env:
+          GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
+        run: |
+          set -euo pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace --info --warning-mode all --console=plain 2>&1 | tee build-logs/assembleDebug.log
+
+      - name: Locate Debug APK
+        id: find_debug_apk
+        run: |
+          set -euo pipefail
+          DAPK=$(find android/app/build/outputs/apk/debug -name "*-debug.apk" -type f | head -n 1 || true)
+          if [[ -z "$DAPK" ]]; then
+            echo "::error::Debug APK not found"
+            exit 1
+          fi
+          echo "debug_apk=$DAPK" >> "$GITHUB_OUTPUT"
+          echo "Found Debug APK at $DAPK"
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cascade-canvassing-debug-apk
+          path: ${{ steps.find_debug_apk.outputs.debug_apk }}
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
+
+      # ---------- Build Release (signed if secrets present) ----------
+      - name: Build Release APK
         working-directory: android
         timeout-minutes: 25
         env:
           GRADLE_OPTS: ${{ env.GRADLE_OPTS }}
         run: |
           set -euo pipefail
-          ./gradlew --stop || true
           ./gradlew assembleRelease --no-daemon --stacktrace --info --warning-mode all --console=plain 2>&1 | tee build-logs/assembleRelease.log
-          ./gradlew --stop || true
 
-      - name: Print last 500 lines of build log (on failure)
+      - name: Print last 500 lines of Release build log (on failure)
         if: failure()
         run: |
           echo "===== tail assembleRelease.log ====="
@@ -148,23 +179,40 @@ jobs:
           echo "===== grep FAILURE / ERROR ====="
           (grep -n -E 'FAILURE:|^> Task .* FAILED|^Caused by:|error: ' android/build-logs/assembleRelease.log || true)
 
-      - name: Locate APK
-        id: find_apk
+      - name: Locate Release APK
+        id: find_release_apk
         run: |
           set -euo pipefail
-          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -n 1 || true)
-          if [[ -z "$APK_PATH" ]]; then
-            echo "::error::APK not found in expected path"
+          RAPK=$(find android/app/build/outputs/apk/release -name "*-release.apk" -type f | head -n 1 || true)
+          if [[ -z "$RAPK" ]]; then
+            echo "::error::Release APK not found"
             exit 1
           fi
-          echo "apk=$APK_PATH" >> "$GITHUB_OUTPUT"
-          echo "Found APK at $APK_PATH"
+          echo "release_apk=$RAPK" >> "$GITHUB_OUTPUT"
+          echo "Found Release APK at $RAPK"
 
-      - name: Upload APK artifact
+      # Verify only the Release APK signature (Debug uses debug keystore)
+      - name: Verify Release APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="${{ steps.find_release_apk.outputs.release_apk }}"
+          TOOL="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          if [[ ! -x "$TOOL" ]]; then
+            TOOL="$(command -v apksigner || true)"
+          fi
+          if [[ -z "$TOOL" ]]; then
+            echo "::warning::apksigner not available; skipping signature verification."
+            exit 0
+          fi
+          echo "Using apksigner at: $TOOL"
+          "$TOOL" verify --print-certs "$APK" || { echo "::error::APK signature verification failed"; exit 1; }
+
+      - name: Upload Release APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: cascade-canvassing-release-apk
-          path: ${{ steps.find_apk.outputs.apk }}
+          path: ${{ steps.find_release_apk.outputs.release_apk }}
           if-no-files-found: error
           compression-level: 6
           retention-days: 14
@@ -177,9 +225,9 @@ jobs:
           path: android/build-logs/**
           retention-days: 7
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (Release APK)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.find_apk.outputs.apk }}
+          files: ${{ steps.find_release_apk.outputs.release_apk }}
           generate_release_notes: true
