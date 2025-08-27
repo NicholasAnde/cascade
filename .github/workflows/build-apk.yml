@@ -15,12 +15,10 @@ jobs:
     timeout-minutes: 60
 
     env:
-      # App config (non-secret defaults ok; secrets override where needed)
       APP_NAME: Cascade Canvassing
       ANDROID_SDK_PLATFORM: "platforms;android-34"
       ANDROID_BUILD_TOOLS: "build-tools;34.0.0"
       ANDROID_PLATFORM_TOOLS: "platform-tools"
-      # Gradle verbosity + caching debug
       GRADLE_OPTS: "-Dorg.gradle.caching.debug=true -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'"
 
     steps:
@@ -30,7 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Ensure Android wrapper & gradle files exist (helps fail early with clear msg)
       - name: Verify Android wrapper exists
         run: |
           set -euo pipefail
@@ -43,7 +40,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p android/app/src/main/assets
-          # index.html from repo root (adjust if your path differs)
           if [[ -f "index.html" ]]; then
             cp index.html android/app/src/main/assets/index.html
           else
@@ -53,7 +49,6 @@ jobs:
             <body><h1>Placeholder UI</h1></body></html>
             HTML
           fi
-          # app.settings.json (generate if not present) using secret SHEETS_ENDPOINT if available
           if [[ -f "app.settings.json" ]]; then
             cp app.settings.json android/app/src/main/assets/app.settings.json
           else
@@ -72,7 +67,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Android SDK + cmdline-tools (provides sdkmanager)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -82,7 +76,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "${ANDROID_SDK_PLATFORM}" "${ANDROID_BUILD_TOOLS}" "${ANDROID_PLATFORM_TOOLS}"
 
-      # Decode keystore and configure signing; all values must be set in repo secrets
+      # Only run signing if secrets are present
       - name: Decode keystore
         if: ${{ secrets.KEYSTORE != '' }}
         run: |
@@ -92,6 +86,7 @@ jobs:
           KEYSTORE: ${{ secrets.KEYSTORE }}
 
       - name: Configure signing (gradle.properties)
+        if: ${{ secrets.KEYSTORE_PASSWORD != '' && secrets.KEY_ALIAS != '' && secrets.KEY_ALIAS_PASSWORD != '' }}
         run: |
           set -euo pipefail
           PROP_FILE="android/gradle.properties"
@@ -110,7 +105,6 @@ jobs:
       - name: Grant gradlew execute
         run: chmod +x android/gradlew
 
-      # Gradle cache (v3 action) + summary; bump cache-key-suffix to force refresh
       - name: Setup Gradle (cache and summary)
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -125,7 +119,6 @@ jobs:
             caches/build-cache-*
           cache-key-suffix: v2
 
-      # Warm dependencies + print versions for easier diagnosis
       - name: Pre-warm Gradle deps
         working-directory: android
         run: |
@@ -170,7 +163,6 @@ jobs:
           compression-level: 6
           retention-days: 14
 
-      # If this run is triggered by a tag, attach the APK to a GitHub Release
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
