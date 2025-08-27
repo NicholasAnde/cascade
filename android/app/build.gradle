@@ -14,19 +14,23 @@ android {
         versionCode 1
         versionName "1.0"
 
+        // Avoid vector issues on older devices
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // Java toolchain to match CI JDK 17
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    // Keep bootstrap builds forgiving
     lint {
         abortOnError false
         checkReleaseBuilds false
     }
 
+    // Avoid resource metadata collisions
     packaging {
         resources { excludes += ["META-INF/*"] }
     }
@@ -36,7 +40,8 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
 
-            // Sign only if props present AND file exists
+            // ---- Safe signing guard ----
+            // Only sign if MYAPP_* props are present AND keystore file exists.
             if (project.hasProperty("MYAPP_STORE_FILE") && file(MYAPP_STORE_FILE).exists()) {
                 signingConfig signingConfigs.create("release") {
                     storeFile file(MYAPP_STORE_FILE)
@@ -47,6 +52,7 @@ android {
             } else {
                 println("Release signing skipped: keystore not found or props missing.")
             }
+            // ---- end guard ----
         }
     }
 }
